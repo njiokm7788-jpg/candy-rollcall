@@ -1,12 +1,13 @@
 # -*- mode: python ; coding: utf-8 -*-
 # PyInstaller 打包方案（§12）。示意 spec——hiddenimports/datas/excludes
 # 须在 Windows 实机上以 one-folder 验证后再用于 one-file 正式构建。
+import os
 import sys
 
 block_cipher = None
 
 a = Analysis(
-    ['..\\app\\main.py'],
+    ['..\\run.py'],
     pathex=[],
     binaries=[],
     datas=[
@@ -23,6 +24,7 @@ a = Analysis(
     excludes=[
         'PyQt5', 'PyQt6', 'PySide2', 'PySide6', 'tkinter',  # 无关 GUI 引擎（§12.1）
         'matplotlib', 'numpy', 'pandas',
+        'PIL', 'Pillow',  # openpyxl 的可选图片依赖；本工具不导出图片，排除以瘦身（§12）
     ],
     win_no_prefer_redirects=False,
     win_private_assemblies=False,
@@ -52,5 +54,5 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    icon='app.ico' if sys.platform == 'win32' else None,
+    icon='app.ico' if (sys.platform == 'win32' and os.path.exists('app.ico')) else None,
 )

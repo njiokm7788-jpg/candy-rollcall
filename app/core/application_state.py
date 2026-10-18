@@ -1,42 +1,26 @@
-"""线程安全应用会话单例（§3.2）。
+"""线程安全应用会话状态（§3.2）。
 
 唯一事实来源：内存状态 + 本地 JSON。前端不得在 localStorage 维护正式名单。
 所有共享状态（名单、drawn_ids、设置）经互斥锁保护；页面、悬浮球通过此服务交互。
+实例由 main.py 创建并注入 Bridge，不使用全局单例（避免隐式共享状态）。
 """
 from __future__ import annotations
 
 import threading
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 from . import models
 from .draw_service import DrawService
 from .models import Student, ValidationError
 from ..storage.json_store import JsonStore, SCHEMA_VERSION
 
-CONFIRM_TOKEN = "CONFIRM"  # 后端确认标记：涉及老师确认的动作须传入
-
 
 class ApplicationState:
-    _instance: Optional["ApplicationState"] = None
-    _instance_lock = threading.Lock()
-
-    @classmethod
-    def instance(cls) -> "ApplicationState":
-        with cls._instance_lock:
-            if cls._instance is None:
-                cls._instance = cls()
-            return cls._instance
-
     def __init__(self):
-        if ApplicationState._instance is not None:
-            raise RuntimeError("ApplicationState 是单例，请使用 ApplicationState.instance()")
         self._lock = threading.RLock()
         self._store = JsonStore()
         self._draw = DrawService()
         self._settings: dict = models.default_settings()
-        self._revision: int = 1  # 名单修订号，防过期草稿覆盖（§10）
-        self._listeners: List[Callable[[dict], None]] = []
-        self._webview2_available: Optional[bool] = None
 
     # ---------- 生命周期 ----------
     def startup(self) -> dict:
@@ -81,49 +65,25 @@ class ApplicationState:
             }
             self._store.save(doc)
 
-    # ---------- 订阅广播 ----------
-    def subscribe(self, callback: Callable[[dict], None]) -> None:
-        with self._lock:
-            self._listeners.append(callback)
-
-    def _broadcast(self, event: str) -> None:
-        with self._lock:
-            snap = self.full_snapshot()
-            listeners = list(self._listeners)
-        for cb in listeners:
-            try:
-                cb({"event": event, **snap})
-            except Exception:
-                pass
-
     # ---------- 名单 ----------
     def get_students(self) -> List[Student]:
         with self._lock:
             return self._draw.get_students()
 
-    def get_revision(self) -> int:
-        with self._lock:
-            return self._revision
-
     def commit_students(self, draft: List[dict], strategy: str,
                         decisions: Optional[Dict[str, str]] = None,
-                        confirmed: bool = False,
-                        base_revision: Optional[int] = None) -> dict:
-        """校验 → 保存 → 重置本轮 → 广播（§10）。
+                        confirmed: bool = False) -> dict:
+        """校验 → 保存 → 重置本轮（§10）。
 
         draft: [{name, studentNo?}] 或含 id（编辑保留）。
         strategy: replace | append
         decisions: {key: "skip"|"keep"}，key 为预览时给定的重复键。
-        base_revision: 过期草稿防护（§10 注意）；不匹配时拒绝提交。
         返回 {"ok": bool, ...}；校验失败返回 ok=False 而非抛异常（供桥接直接返回）。
         """
         if strategy not in ("replace", "append"):
             return {"ok": False, "error": "ValidationError", "message": f"非法策略: {strategy!r}"}
         if not confirmed:
             return {"ok": False, "error": "ValidationError", "message": "缺少确认标记，名单未提交"}
-        if base_revision is not None and base_revision != self._revision:
-            return {"ok": False, "error": "STALE_REVISION",
-                    "message": "名单已被其他窗口修改，请刷新后重试"}
 
         try:
             new_students: List[Student] = []
@@ -165,9 +125,7 @@ class ApplicationState:
                         "message": f"提交后共 {len(final)} 人，超过上限 {models.MAX_STUDENTS} 人"}
 
             self._draw.set_students(final, reset_round=True)  # 名单变化重置本轮（§6.3）
-            self._revision += 1
             self.persist()
-            self._broadcast("students_changed")
             return {"ok": True, **self.full_snapshot()}
 
     # ---------- 抽取 ----------
@@ -198,7 +156,6 @@ class ApplicationState:
             self._draw.set_mode(mode)
             self._settings["mode"] = mode
             self.persist()
-            self._broadcast("mode_changed")
             return {"ok": True, "state": self._draw.snapshot()}
 
     def reset_round(self, confirmed: bool = False) -> dict:
@@ -207,7 +164,6 @@ class ApplicationState:
                 return {"ok": False, "needsConfirm": True,
                         "message": "确认清空本轮已抽记录并重新开始吗？"}
             self._draw.reset_round()
-            self._broadcast("round_reset")
             return {"ok": True, "state": self._draw.snapshot()}
 
     # ---------- 设置 ----------
@@ -216,19 +172,12 @@ class ApplicationState:
             if key not in models.SETTING_KEYS:
                 return {"ok": False, "error": "ValidationError", "message": f"非法设置键: {key}"}
             try:
-                coerced = models._coerce_setting(key, value, self._settings.get(key))
+                coerced = models.coerce_setting(key, value, self._settings.get(key))
             except (ValidationError, TypeError, ValueError) as e:
                 return {"ok": False, "error": "ValidationError", "message": str(e)}
             self._settings[key] = coerced
             self.persist()
-            self._broadcast("preference_changed")
             return {"ok": True, "value": coerced}
-
-    def set_settings_raw(self, settings: dict) -> None:
-        """恢复备份时整体写入设置（已由调用方校验）。"""
-        with self._lock:
-            self._settings = models.validate_settings(settings)
-            self.persist()
 
     def get_settings(self) -> dict:
         with self._lock:
@@ -238,7 +187,6 @@ class ApplicationState:
     def full_snapshot(self) -> dict:
         with self._lock:
             return {
-                "revision": self._revision,
                 "students": [s.to_dict() for s in self._draw.get_students()],
                 "settings": dict(self._settings),
                 "draw": self._draw.snapshot(),

@@ -1,14 +1,13 @@
 """应用入口：WebView2 检测、启动与退出编排（§3.2 应用生命周期、§9.1）。
 
-初始化业务服务 → 检测 WebView2 → 创建点名主窗（可隐藏）→ 启动 GUI 循环
-及球线程 → 圆球可见。点击球显示点名窗；进管理先隐藏点名窗再按需创建；
-关闭管理即销毁并恢复原状态；退出统一结束。
+初始化业务服务 → 检测 WebView2 → 创建唯一主窗（可隐藏）→ 启动 GUI 循环
+及球线程 → 圆球可见。点击球显示主窗并切到点名视图，右键切到管理视图；
+点名页与管理页在同一个 WebView 内切换（不创建第二个窗口）；退出统一结束。
 """
 from __future__ import annotations
 
 import ctypes
 import sys
-import threading
 from pathlib import Path
 
 # ---- 打包资源路径（PyInstaller _MEIPASS 兼容）----
@@ -17,6 +16,24 @@ def resource_path(relative: str) -> str:
     if base:
         return str(Path(base) / relative)
     return str(Path(__file__).resolve().parent.parent / relative)
+
+
+def report_error(context: str, exc: BaseException) -> None:
+    """把窗口/悬浮球回调里的异常写入数据目录日志。
+
+    打包后 console=False；若再静默吞掉异常，“点了没反应”这类接线故障就
+    完全没有出口（离线工具也没有远端日志）。
+    """
+    try:
+        from datetime import datetime
+        from .storage import user_paths
+        logs = user_paths.logs_dir()
+        logs.mkdir(parents=True, exist_ok=True)
+        with open(logs / "error.log", "a", encoding="utf-8") as f:
+            f.write(f"{datetime.now().isoformat(timespec='seconds')} "
+                    f"[{context}] {type(exc).__name__}: {exc}\n")
+    except Exception:
+        pass  # 记日志本身失败不得影响主流程
 
 
 def check_webview2_runtime() -> bool:
@@ -69,6 +86,11 @@ def get_frontend_url() -> str:
     return str(Path(html).resolve())
 
 
+# 悬浮球等非 WebView 入口借此驱动前端切视图（App 由前端定义，未就绪时静默跳过）
+_JS_SHOW_ROLL = "if (typeof App !== 'undefined' && App.showView) App.showView('roll');"
+_JS_SHOW_MANAGE = "if (typeof App !== 'undefined' && App.showView) App.showView('manage');"
+
+
 def main() -> int:
     import webview
 
@@ -86,45 +108,80 @@ def main() -> int:
 
     # 2. 业务服务初始化（崩溃后重启重置本轮，加载名单设置，AT-29）
     from .core.application_state import ApplicationState
-    state = ApplicationState.instance()
+    from .core.models import (
+        DEFAULT_WINDOW_HEIGHT,
+        DEFAULT_WINDOW_WIDTH,
+        MIN_WINDOW_HEIGHT,
+        MIN_WINDOW_WIDTH,
+    )
+    state = ApplicationState()
     state.startup()
+
+    # 退出标记：区分“点名窗 X（收起）”与“应用退出（真正关闭窗口）”
+    quitting = False
 
     # 3. 窗口编排
     from .windows.window_manager import WindowManager
-    wm = WindowManager()
+    wm = WindowManager(on_error=lambda e: report_error("window_manager.eval_js", e))
 
     # 4. 悬浮球（独立 GUI 线程；跨线程 PostMessage）
     from .windows.orb_win32 import create_orb_thread
-    from .windows.dpi_and_snap import Win32MonitorMixin, RECT, clamp_to_workarea
+    from .windows.dpi_and_snap import Win32MonitorMixin, clamp_to_workarea
 
     settings = state.get_settings()
     snap_enabled = bool(settings.get("edgeSnap", True))
     saved = settings.get("lastOrbPosition") or {"x": 0, "y": 0}
+    saved_window = settings.get("lastWindowSize") or {}
+    win_width = int(saved_window.get("width", DEFAULT_WINDOW_WIDTH))
+    win_height = int(saved_window.get("height", DEFAULT_WINDOW_HEIGHT))
+
+    def save_window_size() -> None:
+        """收起/退出前记住主窗尺寸；只读 GUI 线程维护的缓存，避免跨线程取控件。"""
+        try:
+            size = wm.get_size()
+            if size:
+                state.set_preference("lastWindowSize", {"width": size[0], "height": size[1]})
+        except Exception as e:
+            report_error("save_window_size", e)
+
+    def on_window_resized(width: int, height: int) -> None:
+        try:
+            wm.note_size(width, height)
+        except Exception as e:
+            report_error("on_window_resized", e)
 
     def on_position_saved(x: int, y: int) -> None:
         state.set_preference("lastOrbPosition", {"x": x, "y": y})
 
     def on_orb_click() -> None:
-        # 单击球：展开点名窗（§4.2）。跨线程 → 投递到 pywebview 主循环线程。
+        # 单击球：显示主窗并切到点名视图（§4.2）。跨线程 → 走 wm 投递。
         try:
-            wm.roll_window.show()
-            wm.roll_window.restore()
-        except Exception:
-            pass
+            wm.show()
+            wm.eval_js(_JS_SHOW_ROLL)
+        except Exception as e:
+            report_error("on_orb_click", e)
 
     def on_orb_manage() -> None:
-        # 右键→管理名单：隐藏球 + 按需管理窗；关闭后恢复球（§4.2）
-        wm.open_manage(create_manage_window)
+        # 右键→管理名单：显示主窗并切到管理视图；悬浮球保持可见（§4.2）
+        try:
+            wm.show()
+            wm.eval_js(_JS_SHOW_MANAGE)
+        except Exception as e:
+            report_error("on_orb_manage", e)
 
     def on_orb_quit() -> None:
         quit_app()
 
     def collapse_roll_window() -> None:
-        """收起：点名窗隐藏变回悬浮球；轮次保留（§2）。"""
-        wm.hide_roll()
+        """收起：主窗隐藏变回悬浮球；轮次保留（§2）。"""
+        save_window_size()
+        wm.hide()
 
     def quit_app() -> None:
         """统一退出：停止球线程、关闭所有窗口、结束进程（无残留，AT-09）。"""
+        nonlocal quitting
+        quitting = True  # 允许点名窗真正关闭（否则被 closing 事件取消）
+        save_window_size()
         try:
             orb.close()
         except Exception:
@@ -146,43 +203,43 @@ def main() -> int:
     else:
         init_x, init_y = int(saved.get("x", 100)), int(saved.get("y", 100))
 
-    def create_roll_window() -> webview.Window:
-        """点名主窗：唯一长期保留的业务窗；先隐藏创建，球线程就绪后显示。"""
-        return webview.create_window(
+    def on_roll_window_closing() -> bool:
+        """点名窗 X 按钮 → 收起为悬浮球，而不是结束整个工具（球须常驻，§4.2）。
+
+        返回 False 取消关闭；pywebview 的 closing 事件同步生效（should_lock=True）。
+        handler 抛出的异常会被 pywebview 吞掉并视作"不取消"，因此这里必须自行兜底。
+        """
+        if quitting:
+            return True
+        try:
+            save_window_size()
+            wm.hide()
+        except Exception as e:
+            report_error("on_roll_window_closing", e)
+        return False
+
+    def create_main_window() -> webview.Window:
+        """唯一主窗：点名页与管理页在同一 WebView 内切换视图。
+
+        统一尺寸取管理页所需大小（点名页是流式布局，只会更空旷）。
+        先隐藏创建，球线程就绪后由 wm.show() 显示。
+        """
+        win = webview.create_window(
             "CandyRollCall 点名",
             get_frontend_url(),
             js_api=bridge,
-            width=settings.get("expandedSize", {}).get("width", 420),
-            height=settings.get("expandedSize", {}).get("height", 340),
-            min_size=(340, 260),
+            width=win_width,
+            height=win_height,
+            min_size=(MIN_WINDOW_WIDTH, MIN_WINDOW_HEIGHT),
             hidden=True,  # 初始隐藏；点击球显示（实机验证项 §3.2）
         )
-
-    def create_manage_window() -> webview.Window:
-        """管理窗：按需创建；关闭事件走 close_manage 编排，不触发应用退出。"""
-        win = webview.create_window(
-            "管理名单 – CandyRollCall",
-            get_frontend_url() + "?view=manage",
-            js_api=bridge,
-            width=760,
-            height=560,
-            min_size=(600, 420),
-        )
-        win.events.closed += on_manage_window_closed
+        win.events.closing += on_roll_window_closing
+        win.events.resized += on_window_resized
         return win
-
-    def on_manage_window_closed() -> None:
-        """管理窗关闭（X 或返回点名）：销毁并恢复先前状态，不退出主进程。"""
-        wm.close_manage()
-        # 从悬浮球右键进入时：关闭管理后恢复球（AT-40）
-        if orb:
-            orb.show()
 
     # 5. 桥接（窗口编排回调注入）
     from .bridge import Bridge
     bridge = Bridge(state, window_ctrl={
-        "open_manage": lambda: wm.open_manage(create_manage_window),
-        "close_manage": on_manage_window_closed,
         "collapse": collapse_roll_window,
         "fullscreen": lambda: wm.toggle_fullscreen(),
         "quit": quit_app,
@@ -205,8 +262,9 @@ def main() -> int:
         # 下次手动启动时识别当前路径；此处静默修正为当前 EXE（用户已在用新版路径）
         sm.enable()
 
-    # 8. 创建点名主窗并启动 GUI 循环（主线程阻塞）
-    create_roll_window()
+    # 8. 创建主窗并启动 GUI 循环（主线程阻塞）
+    wm.register_window(create_main_window())
+    wm.note_size(win_width, win_height)
     try:
         webview.start(gui="edgechromium", debug=False)
     except Exception:

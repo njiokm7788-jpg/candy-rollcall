@@ -1,16 +1,15 @@
-"""导入导出：CSV / XLSX / 完整 JSON 备份（§5.4、§8.2）。
+"""导入导出：CSV / XLSX 名单（§8.2）。
 
 - CSV 优先 utf-8-sig，提供 GB18030 编码选项；学号按字符串处理。
 - XLSX 用 openpyxl；学号列读取时若为数值不凭空猜前导零。
 - 导入返回预览（有效条数、空姓名、疑似重复、超额），不写库。
-- 完整备份 JSON 含学生记录（UUID）与设置，不含本轮已抽状态。
 """
 from __future__ import annotations
 
 import csv
 import io
-import json
-from typing import Any, Dict, List, Optional, Tuple
+import re
+from typing import Dict, List, Optional, Tuple
 
 from ..core.models import Student, ValidationError, MAX_STUDENTS
 
@@ -55,6 +54,41 @@ def read_xlsx_rows(path: str) -> List[List[str]]:
         return rows
     finally:
         wb.close()
+
+
+# ---------------- 列映射推导（§8.2） ----------------
+
+# 学号列的表头关键词；“序号”必须排除，否则本工具自己导出的表格会错位（AT-14）
+_NAME_HEADER_PATTERNS = (r"姓名", r"名字", r"学生", r"name")
+_NO_HEADER_PATTERNS = (r"学号", r"学籍号", r"编号", r"^no\.?$", r"^id$")
+
+
+def _pick_column(header: List[str], patterns: Tuple[str, ...]) -> int:
+    """按表头文本定位列，未命中返回 -1。"""
+    for i, cell in enumerate(header):
+        for pattern in patterns:
+            if re.search(pattern, cell, re.IGNORECASE):
+                return i
+    return -1
+
+
+def derive_mapping(rows: List[List[str]]) -> Tuple[Dict[str, int], bool]:
+    """推导导入列映射（§8.2）。
+
+    有表头时按表头文本定位列——这样本工具自己导出的“序号/姓名/学号”三列
+    表格可以直接重新导入（AT-14）；无表头时回退第 1 列姓名、第 2 列学号。
+    返回 (mapping, has_header)；无学号列时用 -1 表示“不存在该列”。
+    """
+    if not rows:
+        return {"name": 0, "studentNo": -1}, False
+    header = [str(cell) for cell in rows[0]]
+    has_header = any(re.search(r"姓名|学号|name", cell, re.IGNORECASE) for cell in header)
+    if not has_header:
+        return {"name": 0, "studentNo": 1}, False
+    name_col = _pick_column(header, _NAME_HEADER_PATTERNS)
+    if name_col < 0:
+        name_col = 0
+    return {"name": name_col, "studentNo": _pick_column(header, _NO_HEADER_PATTERNS)}, True
 
 
 # ---------------- 行 → 学生草稿 ----------------
@@ -199,49 +233,3 @@ def export_xlsx(students: List[Student]) -> bytes:
     buf = _io.BytesIO()
     wb.save(buf)
     return buf.getvalue()
-
-
-# ---------------- 完整备份 / 恢复（§5.4） ----------------
-
-def build_backup(students: List[Student], settings: dict) -> dict:
-    """完整备份：含 UUID 与设置；不含本轮已抽状态。"""
-    return {
-        "type": "CandyRollCall-backup",
-        "schemaVersion": 2,
-        "exportedAt": __import__("datetime").datetime.now().isoformat(timespec="seconds"),
-        "students": [s.to_dict() for s in students],
-        "settings": dict(settings),
-    }
-
-
-def parse_backup(content: bytes) -> Tuple[List[Student], dict]:
-    """解析并校验备份；格式/版本/重复 ID 有误抛 ValidationError（AT-27）。"""
-    try:
-        data = json.loads(content.decode("utf-8"))
-    except (json.JSONDecodeError, UnicodeDecodeError) as e:
-        raise ValidationError(f"备份文件不是有效的 JSON: {e}")
-    if not isinstance(data, dict):
-        raise ValidationError("备份根节点必须是对象")
-    if data.get("type") != "CandyRollCall-backup" and "students" not in data:
-        raise ValidationError("不是本工具的备份文件（缺少 students 字段）")
-    version = data.get("schemaVersion")
-    if version not in (1, 2):
-        raise ValidationError(f"不支持的备份版本: {version!r}")
-    raw_students = data.get("students")
-    if not isinstance(raw_students, list):
-        raise ValidationError("students 必须是数组")
-    if len(raw_students) > MAX_STUDENTS:
-        raise ValidationError(f"备份含 {len(raw_students)} 名学生，超过上限 {MAX_STUDENTS}")
-
-    students: List[Student] = []
-    ids = set()
-    for raw in raw_students:
-        stu = Student.from_dict(raw)
-        if stu.id in ids:
-            raise ValidationError(f"备份中存在重复的学生 ID: {stu.id}")
-        ids.add(stu.id)
-        students.append(stu)
-    settings = data.get("settings", {})
-    if not isinstance(settings, dict):
-        raise ValidationError("settings 必须是对象")
-    return students, settings

@@ -27,20 +27,5 @@ def data_file() -> Path:
     return data_dir() / "data.json"
 
 
-def backup_file() -> Path:
-    return data_dir() / "data.json.bak"
-
-
 def logs_dir() -> Path:
     return data_dir() / "logs"
-
-
-def ensure_dirs() -> Path:
-    d = data_dir()
-    d.mkdir(parents=True, exist_ok=True)
-    return d
-
-
-def is_frozen() -> bool:
-    """PyInstaller one-file 冻结运行时 sys._MEIPASS 存在；那里不可写。"""
-    return hasattr(sys, "_MEIPASS") or getattr(sys, "frozen", False)

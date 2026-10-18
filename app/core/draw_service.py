@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import secrets
 import threading
-import time
 import uuid
 from typing import Any, Dict, List, Optional
 
@@ -19,14 +18,12 @@ from .models import Student
 MODE_RANDOM = "random"
 MODE_NO_REPEAT = "no_repeat"
 
-# 状态机（§6.2）
+# 状态机（§6.2）：实际只会进入这五种状态
 EMPTY = "EMPTY"
 IDLE = "IDLE"
 ANIMATING = "ANIMATING"
-REVEALING = "REVEALING"
 RESULT = "RESULT"
 ROUND_COMPLETE = "ROUND_COMPLETE"
-ERROR = "ERROR"
 
 
 class DrawBusyError(RuntimeError):
@@ -130,7 +127,7 @@ class DrawService:
         if not isinstance(count, int) or not 1 <= count <= 5:
             raise ValueError(f"抽取人数须为 1~5: {count!r}")
         with self._lock:
-            if self._state in (ANIMATING, REVEALING) and not self._reveal_done:
+            if self._state == ANIMATING and not self._reveal_done:
                 raise DrawBusyError("抽取进行中")
 
             if not self._students:
@@ -211,5 +208,4 @@ class DrawService:
                 "roundComplete": self._round_complete,
                 "activeResult": active,
                 "revealDone": self._reveal_done,
-                "serverTime": time.time(),
             }

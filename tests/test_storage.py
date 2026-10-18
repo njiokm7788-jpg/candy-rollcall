@@ -1,8 +1,7 @@
-"""存储与会话状态测试（M1 门槛、§5、AT-21/22/27/28/29）。
+"""存储与会话状态测试（M1 门槛、§5、AT-21/22/29）。
 
 使用 CANDY_ROLLCALL_HOME 环境变量隔离临时数据目录。
 """
-import json
 import os
 import sys
 import tempfile
@@ -15,7 +14,7 @@ _tmpdir = tempfile.mkdtemp(prefix="candy-test-")
 os.environ["CANDY_ROLLCALL_HOME"] = _tmpdir
 
 from app.core.application_state import ApplicationState
-from app.core.models import Student, ValidationError
+from app.core.models import ValidationError, default_settings, validate_settings
 from app.storage.json_store import DataCorruptError, JsonStore
 
 
@@ -28,8 +27,6 @@ class TestJsonStore(unittest.TestCase):
         self.dir = tempfile.mkdtemp(prefix="candy-store-")
         self.path = os.path.join(self.dir, "data.json")
         self.store = JsonStore(self.path)
-        # 重置单例，让 ApplicationState 用当前测试目录
-        ApplicationState._instance = None
 
     def test_atomic_save_load(self):
         doc = {"schemaVersion": 2, "students": [{"id": "a", "name": "张小明", "studentNo": "08"}],
@@ -72,14 +69,10 @@ class TestJsonStore(unittest.TestCase):
 
 class TestApplicationState(unittest.TestCase):
     def setUp(self):
-        # 每个测试独立的临时目录 + 新单例
+        # 每个测试独立的临时目录 + 新实例
         self.dir = tempfile.mkdtemp(prefix="candy-app-")
         os.environ["CANDY_ROLLCALL_HOME"] = self.dir
-        ApplicationState._instance = None
-        self.state = ApplicationState.instance()
-
-    def tearDown(self):
-        ApplicationState._instance = None
+        self.state = ApplicationState()
 
     # ---------- 提交与校验 ----------
     def test_commit_replace_resets_round(self):
@@ -128,7 +121,7 @@ class TestApplicationState(unittest.TestCase):
                                           "replace", None, True)
         self.assertEqual(snap["students"][0]["studentNo"], "08")
         # 重新加载后仍是字符串
-        state2 = ApplicationState.instance()
+        state2 = ApplicationState()
         state2.startup()
         students = state2.get_students()
         self.assertEqual(students[0].studentNo, "08")
@@ -138,9 +131,8 @@ class TestApplicationState(unittest.TestCase):
         self.state.commit_students(make_draft(8), "replace", None, True)
         r = self.state.draw()
         self.state.mark_reveal_complete(r["drawId"])
-        # 模拟重启：新单例加载
-        ApplicationState._instance = None
-        state2 = ApplicationState.instance()
+        # 模拟重启：新实例加载
+        state2 = ApplicationState()
         snap = state2.startup()
         self.assertEqual(len(snap["students"]), 8)
         self.assertEqual(snap["draw"]["state"], "IDLE")
@@ -150,10 +142,32 @@ class TestApplicationState(unittest.TestCase):
         self.state.commit_students(make_draft(3), "replace", None, True)
         self.state.set_preference("drawCount", 3)
         self.state.set_preference("baseAnimationSeconds", 6)
-        ApplicationState._instance = None
-        snap = ApplicationState.instance().startup()
+        snap = ApplicationState().startup()
         self.assertEqual(snap["settings"]["drawCount"], 3)
         self.assertEqual(snap["settings"]["baseAnimationSeconds"], 6)
+
+    def test_window_size_persisted_and_clamped(self):
+        """关闭时的窗口尺寸跨重启保留；过小尺寸按最小窗口修正。"""
+        self.assertEqual(self.state.get_settings()["lastWindowSize"],
+                         {"width": 760, "height": 560})
+        r = self.state.set_preference("lastWindowSize", {"width": 980, "height": 700})
+        self.assertTrue(r["ok"])
+        snap = ApplicationState().startup()
+        self.assertEqual(snap["settings"]["lastWindowSize"], {"width": 980, "height": 700})
+
+        r = self.state.set_preference("lastWindowSize", {"width": 480, "height": 300})
+        self.assertTrue(r["ok"])
+        self.assertEqual(r["value"], {"width": 600, "height": 420})
+        self.assertEqual(self.state.get_settings()["lastWindowSize"],
+                         {"width": 600, "height": 420})
+
+    def test_invalid_window_size_falls_back_to_default(self):
+        r = self.state.set_preference("lastWindowSize", {"width": "980", "height": 700})
+        self.assertFalse(r["ok"])
+        r = self.state.set_preference("lastWindowSize", {"width": 980})
+        self.assertFalse(r["ok"])
+        self.assertEqual(validate_settings({"lastWindowSize": "bad"})["lastWindowSize"],
+                         default_settings()["lastWindowSize"])
 
     def test_corrupt_data_starts_clean_not_crash(self):
         self.state.commit_students(make_draft(3), "replace", None, True)
@@ -163,8 +177,7 @@ class TestApplicationState(unittest.TestCase):
             if os.path.exists(p):
                 with open(p, "w", encoding="utf-8") as f:
                     f.write("{broken")
-        ApplicationState._instance = None
-        snap = ApplicationState.instance().startup()
+        snap = ApplicationState().startup()
         # 不崩溃：从干净状态开始（教师用外部备份恢复）
         self.assertEqual(snap["students"], [])
 
@@ -196,17 +209,7 @@ class TestApplicationState(unittest.TestCase):
         r = self.state.draw()
         self.state.mark_reveal_complete(r["drawId"])
         self.state.set_preference("drawCount", 3)
-        self.assertEqual(self.state.get_revision(), 2)
         self.assertEqual(len(self.state.full_snapshot()["draw"]["activeResult"]["students"]), 1)
-
-    # ---------- revision 防过期草稿 ----------
-    def test_stale_revision_rejected(self):
-        self.state.commit_students(make_draft(3), "replace", None, True)
-        rev = self.state.get_revision()
-        self.state.commit_students(make_draft(4), "replace", None, True)  # 其他窗口改了
-        r = self.state.commit_students(make_draft(5), "replace", None, True, base_revision=rev)
-        self.assertFalse(r["ok"])
-        self.assertEqual(r["error"], "STALE_REVISION")
 
     # ---------- 抽取接口（AT-18） ----------
     def test_draw_busy_via_state(self):
@@ -217,32 +220,12 @@ class TestApplicationState(unittest.TestCase):
         self.assertFalse(r2["ok"])
         self.assertEqual(r2["error"], "BUSY")
 
-    # ---------- 恢复备份（AT-28） ----------
-    def test_restore_flow(self):
-        from app.storage.import_export import build_backup, parse_backup
-        students = [Student.create("备份学生", "01")]
-        backup = build_backup(students, {"mode": "random", "drawCount": 2})
-        blob = json.dumps(backup, ensure_ascii=False).encode("utf-8")
-        parsed_students, parsed_settings = parse_backup(blob)
-        self.state.commit_students(make_draft(5), "replace", None, True)
-        snap = self.state.commit_students(
-            [s.to_dict() for s in parsed_students], "replace", None, True)
-        self.state.set_settings_raw(parsed_settings)
-        snap = self.state.full_snapshot()
-        self.assertEqual(len(snap["students"]), 1)
-        self.assertEqual(snap["students"][0]["name"], "备份学生")
-        self.assertEqual(snap["settings"]["mode"], "random")
-
 
 class TestConcurrency(unittest.TestCase):
     def setUp(self):
         self.dir = tempfile.mkdtemp(prefix="candy-conc-")
         os.environ["CANDY_ROLLCALL_HOME"] = self.dir
-        ApplicationState._instance = None
-        self.state = ApplicationState.instance()
-
-    def tearDown(self):
-        ApplicationState._instance = None
+        self.state = ApplicationState()
 
     def test_concurrent_draws_single_transaction(self):
         """并发抽取：只有一个成功，其余 BUSY（AT-18）。"""
@@ -265,7 +248,7 @@ class TestConcurrency(unittest.TestCase):
         self.assertEqual(len(results) - len(ok), 7, "其余全部 BUSY")
 
     def test_concurrent_commits_consistent(self):
-        """并发提交：revision 防护下数据一致。"""
+        """并发提交：数据一致（后提交者生效）。"""
         self.state.commit_students(make_draft(3), "replace", None, True)
         errors = []
 

@@ -137,17 +137,18 @@ async function main() {
     await new Promise((res, rej) => { ws.addEventListener("open", res); ws.addEventListener("error", rej); });
     const cdp = new CDP(ws);
 
+    // 单窗口设计：点名/管理在同一 document 内切换视图，窗口尺寸统一 760×560
     const ROLL = `http://127.0.0.1:${PORT}/index.html`;
-    const MANAGE = `http://127.0.0.1:${PORT}/index.html?view=manage`;
+    const WIN = { width: 760, height: 560 };
 
     // ---- 1. 待点名（IDLE） ----
-    let p = await openPage(cdp, { url: ROLL, width: 420, height: 340 });
+    let p = await openPage(cdp, { url: ROLL, ...WIN });
     await shot(cdp, p.sessionId, "01-roll-idle");
     await evaluate(cdp, p.sessionId, "1"); // keep page for later? 用独立页更干净 → 关掉
     await cdp.send("Target.closeTarget", { targetId: p.targetId });
 
     // ---- 2~5. 抽取全过程（动画中 / 逐个揭晓 / 结果 / 全屏） ----
-    p = await openPage(cdp, { url: ROLL, width: 420, height: 340 });
+    p = await openPage(cdp, { url: ROLL, ...WIN });
     await evaluate(cdp, p.sessionId, "document.querySelectorAll('#count-picker .count-dot')[2].click()");
     await sleep(200);                                    // 走真实 UI 选中"3 人"
     await evaluate(cdp, p.sessionId, "document.getElementById('btn-start').click()");
@@ -165,7 +166,7 @@ async function main() {
     await cdp.send("Target.closeTarget", { targetId: p.targetId });
 
     // ---- 6. 轮次完成（ROUND_COMPLETE） ----
-    p = await openPage(cdp, { url: ROLL, width: 420, height: 340 });
+    p = await openPage(cdp, { url: ROLL, ...WIN });
     await evaluate(cdp, p.sessionId, "window.__mock.shrinkTo(3)");
     await evaluate(cdp, p.sessionId, "document.querySelectorAll('#count-picker .count-dot')[2].click()");
     await sleep(200);
@@ -174,8 +175,13 @@ async function main() {
     await shot(cdp, p.sessionId, "06-roll-round-complete");
     await cdp.send("Target.closeTarget", { targetId: p.targetId });
 
-    // ---- 7~9. 管理窗三个 Tab ----
-    p = await openPage(cdp, { url: MANAGE, width: 760, height: 560, scale: 2 });
+    // ---- 7~9. 管理页三个 Tab（走真实入口：更多 → 管理名单） ----
+    p = await openPage(cdp, { url: ROLL, ...WIN, scale: 2 });
+    await sleep(500);                                    // 等 init() 落到默认点名视图
+    await evaluate(cdp, p.sessionId, "document.getElementById('btn-more').click()");
+    await sleep(200);
+    await evaluate(cdp, p.sessionId, "document.getElementById('btn-manage').click()");
+    await sleep(300);
     await shot(cdp, p.sessionId, "07-manage-list");
     await evaluate(cdp, p.sessionId, `document.querySelector('.tab[data-tab="tools"]').click()`);
     await sleep(300);

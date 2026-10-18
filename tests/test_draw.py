@@ -6,8 +6,7 @@ import unittest
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from app.core.draw_service import (
-    DrawBusyError, DrawService, ANIMATING, REVEALING, RESULT, ROUND_COMPLETE,
-    EMPTY, IDLE, MODE_NO_REPEAT, MODE_RANDOM,
+    DrawBusyError, DrawService, ANIMATING, RESULT, EMPTY, IDLE, MODE_RANDOM,
 )
 from app.core.models import Student
 
@@ -149,7 +148,7 @@ class TestDraw(unittest.TestCase):
         self.assertEqual(self.svc.get_state(), RESULT)
 
     def test_reveal_now_partial_after_reveal(self):
-        """REVEALING 已揭晓部分后立即揭晓：先前结果不变，余下全部揭晓。"""
+        """动画中已揭晓部分后立即揭晓：先前结果不变，余下全部揭晓。"""
         self.svc.set_students(make_students(10))
         r = self.svc.draw(3)
         # 已锁定结果在前端已揭晓 2 人（前端层面），后端状态仍是未完成

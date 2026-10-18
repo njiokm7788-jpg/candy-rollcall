@@ -29,5 +29,12 @@ logs/
 .DS_Store
 Thumbs.db
 
+# Three.js 构建依赖（仅开发期；运行时使用 frontend/vendor 下的预构建包）
+node_modules/
+
 # 截图工装产物（可随时用 tools/screenshot/shoot.mjs 重新生成）
 tools/screenshot/out/
+
+# 本地开发临时产物（UI 截图、设计稿预览，不入库）
+artifacts/
+design-preview.html

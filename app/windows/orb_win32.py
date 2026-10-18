@@ -8,13 +8,14 @@ GDI 绘制糖果渐变球，置顶、拖动、边缘吸附、右键菜单。
 from __future__ import annotations
 
 import ctypes
+import sys
 import threading
 from ctypes import wintypes
 from typing import Callable, Optional
 
 from .dpi_and_snap import RECT, clamp_to_workarea, nearest_snap_edge
 
-if ctypes.sizeof(ctypes.c_void_p) != ctypes.sizeof(ctypes.c_void_p):  # pragma: no cover
+if sys.platform != "win32":  # pragma: no cover
     raise ImportError("orb_win32 仅支持 Windows")
 
 user32 = ctypes.windll.user32
@@ -25,15 +26,11 @@ kernel32 = ctypes.windll.kernel32
 WM_APP = 0x8000
 WM_APP_SHOW = WM_APP + 1        # 显示球
 WM_APP_HIDE = WM_APP + 2        # 隐藏球
-WM_APP_SNAP = WM_APP + 3        # 执行吸附
 WM_APP_QUIT = WM_APP + 10       # 退出消息循环
-WM_APP_CLOSE_MENUS = WM_APP + 11
 
 WS_POPUP = 0x80000000
-WS_VISIBLE = 0x10000000
 WS_EX_TOPMOST = 0x00000008
 WS_EX_TOOLWINDOW = 0x00000080
-WS_EX_LAYERED = 0x00080000
 
 WM_LBUTTONDOWN = 0x0201
 WM_LBUTTONUP = 0x0202
@@ -42,17 +39,10 @@ WM_MOUSEMOVE = 0x0200
 WM_PAINT = 0x000F
 WM_ERASEBKGND = 0x0014
 WM_DESTROY = 0x0002
-WM_CREATE = 0x0001
-WM_COMMAND = 0x0111
-
-HTCAPTION = 2
-SRCCOPY = 0x00CC0020
 
 CS_HREDRAW = 0x0002
 CS_VREDRAW = 0x0001
-COLOR_WINDOW = 5
 
-IDI_APPLICATION = 32512
 MF_STRING = 0x0000
 TPM_RIGHTBUTTON = 0x0002
 TPM_RETURNCMD = 0x0100
@@ -113,6 +103,19 @@ user32.CreateWindowExW.restype = wintypes.HWND
 user32.TrackPopupMenu.restype = wintypes.BOOL
 gdi32.CreateSolidBrush.restype = wintypes.HBRUSH
 gdi32.CreateEllipticRgn.restype = wintypes.HRGN
+
+# GDI 句柄参数必须显式声明类型：ctypes 默认按 C int 转换，句柄值超过 2^31
+# 时会抛 "int too long to convert"（SelectObject / DeleteObject / SetWindowRgn）。
+gdi32.SelectObject.restype = ctypes.c_void_p
+gdi32.SelectObject.argtypes = [wintypes.HDC, ctypes.c_void_p]
+gdi32.DeleteObject.restype = wintypes.BOOL
+gdi32.DeleteObject.argtypes = [ctypes.c_void_p]
+gdi32.Ellipse.argtypes = [wintypes.HDC, ctypes.c_int, ctypes.c_int,
+                          ctypes.c_int, ctypes.c_int]
+user32.BeginPaint.restype = wintypes.HDC
+user32.BeginPaint.argtypes = [wintypes.HWND, ctypes.POINTER(PAINTSTRUCT)]
+user32.EndPaint.argtypes = [wintypes.HWND, ctypes.POINTER(PAINTSTRUCT)]
+user32.SetWindowRgn.argtypes = [wintypes.HWND, ctypes.c_void_p, wintypes.BOOL]
 
 
 class OrbWin32:
@@ -237,9 +240,6 @@ class OrbWin32:
         if msg == WM_APP_HIDE:
             user32.ShowWindow(hwnd, 0)
             return 0
-        if msg == WM_APP_SNAP:
-            self._do_snap(hwnd)
-            return 0
         if msg == WM_APP_QUIT:
             user32.PostQuitMessage(0)
             return 0
@@ -252,8 +252,7 @@ class OrbWin32:
         ps = PAINTSTRUCT()
         hdc = user32.BeginPaint(hwnd, ctypes.byref(ps))
         size = self.size
-        # 外圈
-        brush = user32.GetStockObject(0)  # NULL_BRUSH 不便取色，用自建
+        # 外圈（GetStockObject 属 gdi32 且此处本不需要，直接选自建色刷）
         gdi32.SelectObject(hdc, self._hbr_ring)
         gdi32.Ellipse(hdc, 0, 0, size, size)
         # 内核高光
@@ -373,13 +372,6 @@ class OrbWin32:
     def hide(self) -> None:
         if self.hwnd:
             user32.PostMessageW(self.hwnd, WM_APP_HIDE, 0, 0)
-
-    def request_snap(self) -> None:
-        if self.hwnd:
-            user32.PostMessageW(self.hwnd, WM_APP_SNAP, 0, 0)
-
-    def get_position(self) -> tuple:
-        return self._last_pos
 
     def close(self) -> None:
         """退出：向 GUI 线程投递退出消息，销毁窗口不留孤儿进程（AT-09）。"""

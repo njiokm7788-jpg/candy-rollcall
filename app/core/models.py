@@ -8,7 +8,7 @@
 from __future__ import annotations
 
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, Optional
 
 MAX_STUDENTS = 100
@@ -18,15 +18,24 @@ MAX_STUDENT_NO_LEN = 20
 # 设置键白名单（§10 set_preference）
 SETTING_KEYS = {
     "mode",                 # random | no_repeat
+    "sceneMode",            # sphere | cube | cylinder | gallery_3d
     "drawCount",            # 1~5
     "baseAnimationSeconds",  # 2~8
     "edgeSnap",             # bool
     "startWithWindows",     # bool
     "lastOrbPosition",      # {"x": int, "y": int}
-    "expandedSize",         # {"width": int, "height": int}
+    "lastWindowSize",       # {"width": int, "height": int}
 }
 
 VALID_MODES = ("random", "no_repeat")
+VALID_SCENE_MODES = ("sphere", "cube", "cylinder", "gallery_3d")
+
+DEFAULT_WINDOW_WIDTH = 760
+DEFAULT_WINDOW_HEIGHT = 560
+MIN_WINDOW_WIDTH = 600
+MIN_WINDOW_HEIGHT = 420
+MAX_WINDOW_WIDTH = 10000
+MAX_WINDOW_HEIGHT = 10000
 
 
 class ValidationError(ValueError):
@@ -101,7 +110,7 @@ def validate_settings(raw: Any) -> dict:
         if key not in SETTING_KEYS:
             continue
         try:
-            out[key] = _coerce_setting(key, value, out[key])
+            out[key] = coerce_setting(key, value, out[key])
         except (ValidationError, TypeError, ValueError):
             continue  # 非法值静默回退默认，保证损坏数据可加载
     return out
@@ -110,19 +119,24 @@ def validate_settings(raw: Any) -> dict:
 def default_settings() -> dict:
     return {
         "mode": "no_repeat",
+        "sceneMode": "sphere",
         "drawCount": 1,
         "baseAnimationSeconds": 4,
         "edgeSnap": True,
         "startWithWindows": False,
         "lastOrbPosition": {"x": 0, "y": 0},
-        "expandedSize": {"width": 420, "height": 340},
+        "lastWindowSize": {"width": DEFAULT_WINDOW_WIDTH, "height": DEFAULT_WINDOW_HEIGHT},
     }
 
 
-def _coerce_setting(key: str, value: Any, fallback: Any) -> Any:
+def coerce_setting(key: str, value: Any, fallback: Any) -> Any:
     if key == "mode":
         if value not in VALID_MODES:
             raise ValidationError(f"非法模式: {value!r}")
+        return value
+    if key == "sceneMode":
+        if value not in VALID_SCENE_MODES:
+            raise ValidationError(f"非法 3D 场景: {value!r}")
         return value
     if key == "drawCount":
         n = int(value)
@@ -140,21 +154,18 @@ def _coerce_setting(key: str, value: Any, fallback: Any) -> Any:
         if isinstance(value, dict) and isinstance(value.get("x"), int) and isinstance(value.get("y"), int):
             return {"x": value["x"], "y": value["y"]}
         raise ValidationError("非法坐标")
-    if key == "expandedSize":
-        if isinstance(value, dict):
-            w, h = value.get("width"), value.get("height")
-            if isinstance(w, int) and isinstance(h, int) and 200 <= w <= 2000 and 150 <= h <= 1500:
-                return {"width": w, "height": h}
-        raise ValidationError("非法窗口尺寸")
+    if key == "lastWindowSize":
+        if not isinstance(value, dict):
+            raise ValidationError("非法窗口尺寸")
+        width = value.get("width")
+        height = value.get("height")
+        if (not isinstance(width, int) or isinstance(width, bool) or
+                not isinstance(height, int) or isinstance(height, bool)):
+            raise ValidationError("窗口尺寸必须是整数")
+        if width <= 0 or height <= 0:
+            raise ValidationError("窗口尺寸必须大于 0")
+        return {
+            "width": max(MIN_WINDOW_WIDTH, min(MAX_WINDOW_WIDTH, width)),
+            "height": max(MIN_WINDOW_HEIGHT, min(MAX_WINDOW_HEIGHT, height)),
+        }
     return fallback
-
-
-def display_label(student: Student) -> str:
-    """卡片显示格式：同名可用学号区分（§5.1），“姓名 · 08号”。"""
-    if student.studentNo:
-        return f"{student.name} · {student.studentNo}号"
-    return student.name
-
-
-def new_id() -> str:
-    return str(uuid.uuid4())

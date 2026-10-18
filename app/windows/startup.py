@@ -76,11 +76,13 @@ class StartupManager:
             with winreg.OpenKey(winreg.HKEY_CURRENT_USER, RUN_KEY, 0, winreg.KEY_SET_VALUE) as k:
                 winreg.DeleteValue(k, APP_NAME)
             return True
-        except (FileNotFoundError, OSError):
+        except FileNotFoundError:
+            return True  # 本就没有自启项：幂等视为成功
+        except OSError:
             return False
 
     def check_stale_path(self) -> bool:
-        """检测注册的自启路径与当前 EXE 是否一致（AT-30：移动 EXE 后失效提示）。"""
+        """检测注册的自启路径与当前 EXE 是否一致（AT-30：移动 EXE 后由 main 静默修正）。"""
         reg = self.get_registered_path()
         if not reg:
             return False

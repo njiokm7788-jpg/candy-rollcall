@@ -1,6 +1,4 @@
-"""导入导出测试（M3 门槛、§8、AT-14/26/27/34）。"""
-import io
-import json
+"""导入导出测试（M3 门槛、§8、AT-14/26/34）。"""
 import os
 import sys
 import unittest
@@ -15,15 +13,58 @@ def mk(n, prefix="学生"):
     return [Student.create(f"{prefix}{i:02d}") for i in range(1, n + 1)]
 
 
+class TestDeriveMapping(unittest.TestCase):
+    """列映射推导（§8.2）：本工具自己的导出必须能重新导入（AT-14）。"""
+
+    def test_tool_export_header_maps_name_and_no(self):
+        """“序号/姓名/学号”三列：序号不得被当作姓名或学号。"""
+        rows = [["序号", "姓名", "学号"], ["1", "张小明", "08"]]
+        mapping, has_header = ie.derive_mapping(rows)
+        self.assertTrue(has_header)
+        self.assertEqual(mapping, {"name": 1, "studentNo": 2})
+        self.assertEqual(ie.rows_to_drafts(rows, mapping, has_header),
+                         [{"name": "张小明", "studentNo": "08"}])
+
+    def test_common_two_column_header(self):
+        rows = [["姓名", "学号"], ["张小明", "08"]]
+        self.assertEqual(ie.derive_mapping(rows), ({"name": 0, "studentNo": 1}, True))
+
+    def test_reversed_header_order(self):
+        rows = [["学号", "姓名"], ["08", "张小明"]]
+        self.assertEqual(ie.derive_mapping(rows), ({"name": 1, "studentNo": 0}, True))
+
+    def test_header_without_student_no_column(self):
+        rows = [["姓名"], ["张小明"]]
+        self.assertEqual(ie.derive_mapping(rows), ({"name": 0, "studentNo": -1}, True))
+
+    def test_no_header_falls_back_to_first_two_columns(self):
+        rows = [["张小明", "08"]]
+        self.assertEqual(ie.derive_mapping(rows), ({"name": 0, "studentNo": 1}, False))
+
+    def test_single_column_without_header(self):
+        rows = [["张小明"]]
+        mapping, has_header = ie.derive_mapping(rows)
+        self.assertEqual((mapping, has_header), ({"name": 0, "studentNo": 1}, False))
+        self.assertEqual(ie.rows_to_drafts(rows, mapping, has_header),
+                         [{"name": "张小明", "studentNo": None}])
+
+    def test_empty_rows(self):
+        self.assertEqual(ie.derive_mapping([]), ({"name": 0, "studentNo": -1}, False))
+
+
 class TestCsv(unittest.TestCase):
     def test_csv_roundtrip_preserves_leading_zero(self):
-        """AT-14：学号 08 导出再导入仍为 08（字符串）。"""
+        """AT-14：学号 08 导出再导入仍为 08（字符串），列映射由表头推导。"""
         students = [Student.create("张小明", "08"), Student.create("李小红", "")]
         data = ie.export_csv(students)
         rows = ie.read_csv_rows(data, "utf-8-sig")
         self.assertEqual(rows[0], ["序号", "姓名", "学号"])
         self.assertEqual(rows[1][2], "08")  # 前导零保留
-        drafts = ie.rows_to_drafts(rows[1:], {"name": 1, "studentNo": 2})
+        # 走真实导入路径（表头推导），不再手工硬编码列号
+        mapping, has_header = ie.derive_mapping(rows)
+        drafts = ie.rows_to_drafts(rows, mapping, has_header)
+        self.assertEqual(len(drafts), 2)
+        self.assertEqual(drafts[0]["name"], "张小明")
         self.assertEqual(drafts[0]["studentNo"], "08")
 
     def test_csv_gb18030(self):
@@ -55,6 +96,11 @@ class TestXlsx(unittest.TestCase):
             self.assertEqual(rows[0], ["序号", "姓名", "学号"])
             self.assertEqual(rows[1][2], "08")
             self.assertEqual(rows[2][2], "9")
+            # 走真实导入路径（表头推导）：姓名列不得被“序号”列顶替（AT-14）
+            mapping, has_header = ie.derive_mapping(rows)
+            drafts = ie.rows_to_drafts(rows, mapping, has_header)
+            self.assertEqual([d["name"] for d in drafts], ["张小明", "李小红"])
+            self.assertEqual(drafts[0]["studentNo"], "08")
         finally:
             os.unlink(path)
 
@@ -116,45 +162,6 @@ class TestPreview(unittest.TestCase):
         p = ie.preview_import(drafts, [])
         exact = [i for i in p["issues"] if i["kind"] == "duplicate_exact"]
         self.assertEqual(len(exact), 1)  # 第二条被报告
-
-
-class TestBackup(unittest.TestCase):
-    def test_backup_build_and_parse(self):
-        students = [Student.create("张小明", "08")]
-        settings = {"mode": "random", "drawCount": 3, "baseAnimationSeconds": 5}
-        backup = ie.build_backup(students, settings)
-        blob = json.dumps(backup, ensure_ascii=False).encode("utf-8")
-        parsed_students, parsed_settings = ie.parse_backup(blob)
-        self.assertEqual([s.to_dict() for s in parsed_students],
-                         [s.to_dict() for s in students])
-        self.assertEqual(parsed_settings["mode"], "random")
-
-    def test_corrupt_backup_rejected(self):
-        """AT-27 后端部分：损坏备份被拒绝，不覆盖数据。"""
-        for bad in (b"", b"not json", b"{}", b'{"students": "x"}'):
-            with self.assertRaises(ValidationError):
-                ie.parse_backup(bad)
-
-    def test_duplicate_ids_in_backup_rejected(self):
-        s = Student.create("张小明", "08")
-        backup = {"type": "CandyRollCall-backup", "schemaVersion": 2,
-                  "students": [s.to_dict(), dict(s.to_dict())], "settings": {}}
-        with self.assertRaises(ValidationError):
-            ie.parse_backup(json.dumps(backup).encode())
-
-    def test_over_100_in_backup_rejected(self):
-        students = [Student.create(f"学生{i}") for i in range(101)]
-        backup = {"type": "CandyRollCall-backup", "schemaVersion": 2,
-                  "students": [s.to_dict() for s in students], "settings": {}}
-        with self.assertRaises(ValidationError):
-            ie.parse_backup(json.dumps(backup).encode())
-
-    def test_backup_excludes_round_state(self):
-        """完整备份不含本轮已抽状态（§5.4）。"""
-        students = mk(3)
-        backup = ie.build_backup(students, {})
-        self.assertNotIn("drawnIds", json.dumps(backup))
-        self.assertNotIn("drawn", json.dumps(backup).lower().replace("drawncount", ""))
 
 
 if __name__ == "__main__":

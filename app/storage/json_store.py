@@ -11,7 +11,7 @@ import os
 import tempfile
 import threading
 from pathlib import Path
-from typing import Any, Optional
+from typing import Optional
 
 from . import user_paths
 
@@ -58,7 +58,7 @@ class JsonStore:
                         pass
                 raise DataCorruptError(
                     f"数据文件损坏且无可恢复副本: {self._path}。"
-                    f"请使用教师自己的 JSON 备份恢复，数据未被覆盖。"
+                    f"请用外部备份的 data.json 覆盖它（原文件未被覆盖）。"
                 )
 
     @staticmethod
@@ -105,16 +105,3 @@ class JsonStore:
             except OSError:
                 pass
             raise
-
-    # ---- 备份文件读写（教师可见的完整备份走 import_export，这里只管内部 .bak） ----
-    def write_raw(self, path: Path, data: dict) -> None:
-        with self._lock:
-            self._atomic_write(data, target=Path(path))
-
-
-def empty_document() -> dict:
-    return {
-        "schemaVersion": SCHEMA_VERSION,
-        "students": [],
-        "settings": {},
-    }

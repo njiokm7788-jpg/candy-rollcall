@@ -1,0 +1,13 @@
+{
+  "name": "candy-rollcall-build",
+  "private": true,
+  "version": "1.0.0",
+  "description": "CandyRollCall 前端 3D 舞台构建依赖",
+  "scripts": {
+    "build:three": "esbuild frontend/src/three-stage.js --bundle --format=iife --global-name=ThreeStageBundle --outfile=frontend/vendor/three-stage.bundle.js --minify --target=chrome100"
+  },
+  "devDependencies": {
+    "esbuild": "^0.25.0",
+    "three": "^0.186.1"
+  }
+}

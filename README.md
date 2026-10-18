@@ -10,7 +10,7 @@ Windows 便携版桌面应用：双击 EXE 启动，糖果色圆形悬浮球，�
 - **悬浮球**：Win32 真圆形窗口（椭圆命中区域），置顶、拖动、左右边缘自动吸附、右键菜单
 - **点名**：完全随机 / 不重复两种模式（默认不重复），每次 1～5 人依次揭晓
 - **动效**：基础 2～8 秒（默认 4 秒）翻转减速 + 每人约 0.6 秒逐人揭晓；动画中可“立即揭晓”
-- **管理**：手动添加/编辑/删除、批量粘贴、Excel/CSV 导入导出、重复逐项确认、完整 JSON 备份/恢复
+- **管理**：手动添加/编辑/删除、批量粘贴、Excel/CSV 导入导出、重复逐项确认
 - **系统集成**：开机自启（默认关闭，仅当前用户 HKCU）、单实例、WebView2 检测
 - **全程静音**，无任何网络请求
 
@@ -27,11 +27,11 @@ candy-rollcall/
 │  │  └─ application_state.py # 线程安全会话单例（唯一事实来源）
 │  ├─ storage/
 │  │  ├─ json_store.py        # 原子写入 + .bak 损坏恢复
-│  │  ├─ import_export.py     # CSV/XLSX/JSON 备份
+│  │  ├─ import_export.py     # CSV/XLSX 导入导出
 │  │  └─ user_paths.py        # %LOCALAPPDATA%\CandyRollCall
 │  └─ windows/
 │     ├─ orb_win32.py         # 圆形悬浮球 HWND/WndProc
-│     ├─ window_manager.py    # 点名窗常驻可隐藏、管理窗按需创建销毁
+│     ├─ window_manager.py    # 唯一主窗：显示/隐藏/全屏/JS 投递
 │     ├─ dpi_and_snap.py      # 主屏工作区与吸附
 │     └─ startup.py           # HKCU 自启与单实例互斥体
 ├─ frontend/                  # 糖果活力风页面（无外部资源）
@@ -70,6 +70,6 @@ pyinstaller packaging\CandyRollCall.spec --clean --noconfirm
 ## 重要设计约束（与文档对应）
 
 - 前端不做随机：结果由 Python `secrets.SystemRandom` 在抽取开始时一次锁定（drawId 事务）
-- 管理窗按需创建、关闭即销毁；点名主窗长期保留（可隐藏）
+- 单窗口设计：点名页与管理页在同一 WebView 内切换视图（无第二窗口）；窗口可收起为悬浮球
 - “立即揭晓”仅终止前端剩余动画，经 `mark_reveal_complete(drawId)` 幂等完成，不重抽
-- 涉及确认的操作须前端显式确认 + 后端 revision 校验，防过期草稿覆盖
+- 涉及确认的操作须前端显式确认 + 后端校验 confirmed 标记，防未经确认的写入

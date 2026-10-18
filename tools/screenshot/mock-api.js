@@ -22,15 +22,14 @@
 
   var settings = {
     mode: "no_repeat",
+    sceneMode: "sphere",
     drawCount: 1,
     baseAnimationSeconds: 4,
     edgeSnap: true,
     startWithWindows: false,
-    lastOrbPosition: { x: 0, y: 0 },
-    expandedSize: { width: 420, height: 340 }
+    lastOrbPosition: { x: 0, y: 0 }
   };
 
-  var revision = 3;
   var drawn = {};          // id -> true（本轮已抽）
   var active = null;       // {drawId, students}
   var revealDone = false;
@@ -50,15 +49,13 @@
       remaining: remaining(),
       roundComplete: phase === "ROUND_COMPLETE",
       activeResult: active ? { drawId: active.drawId, students: active.students } : null,
-      revealDone: revealDone,
-      serverTime: Date.now() / 1000
+      revealDone: revealDone
     };
   }
 
   function snapshot() {
     return {
       ok: true,
-      revision: revision,
       students: students.map(function (s) { return { id: s.id, name: s.name, studentNo: s.studentNo }; }),
       settings: JSON.parse(JSON.stringify(settings)),
       draw: drawState()
@@ -107,34 +104,27 @@
       return delay({ ok: true, applied: true, state: drawState() });
     },
 
-    set_draw_count: function (c) { settings.drawCount = c; revision += 1; return delay({ ok: true, value: c }); },
+    set_draw_count: function (c) { settings.drawCount = c; return delay({ ok: true, value: c }); },
     change_mode: function (m, confirmed) {
       if (!confirmed) return delay({ ok: false, needsConfirm: true, message: "切换模式将重置本轮点名进度，确认切换吗？" });
       settings.mode = m; drawn = {}; active = null; revealDone = false; phase = "IDLE";
-      revision += 1; return delay({ ok: true, state: drawState() });
+      return delay({ ok: true, state: drawState() });
     },
     reset_round: function (confirmed) {
       if (!confirmed) return delay({ ok: false, needsConfirm: true, message: "确认清空本轮已抽记录并重新开始吗？" });
       drawn = {}; active = null; revealDone = false; phase = students.length ? "IDLE" : "EMPTY";
       return delay({ ok: true, state: drawState() });
     },
-    set_preference: function (k, v) { settings[k] = v; revision += 1; return delay({ ok: true, value: v }); },
+    set_preference: function (k, v) { settings[k] = v; return delay({ ok: true, value: v }); },
 
-    commit_students: function () { revision += 1; return delay(snapshot()); },
+    commit_students: function () { return delay(snapshot()); },
     import_from_paste: function () { return delay({ ok: true }); },
     export_students: function () { return delay({ ok: true }); },
-    backup_all: function () { return delay({ ok: true }); },
-    restore_preview: function () { return delay({ ok: false, error: "Cancelled" }); },
-    restore_commit: function () { return delay({ ok: true }); },
     import_file_dialog: function () { return delay({ ok: false, error: "Cancelled" }); },
-    import_preview: function () { return delay({ ok: true }); },
 
-    show_manage: function () { return delay({ ok: true }); },
-    close_manage: function () { return delay({ ok: true }); },
     collapse: function () { return delay({ ok: true }); },
     show_fullscreen: function () { return delay({ ok: true }); },
-    quit_app: function () { return delay({ ok: true }); },
-    notify_window_closed: function () { return delay({ ok: true }); }
+    quit_app: function () { return delay({ ok: true }); }
   };
 
   window.pywebview = { api: api };
