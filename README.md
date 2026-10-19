@@ -1,4 +1,4 @@
-# CandyRollCall 🍬 小学课堂随机点名工具
+# 圈圈点名（QuanQuanRollCall）🍬 小学课堂随机点名工具
 
 Windows 便携版桌面应用：双击 EXE 启动，糖果色圆形悬浮球，点击展开点名窗，
 静音动效随机抽取 1～5 名学生。单班级（最多 100 人），全部数据本地存储，完全离线可用。
@@ -28,14 +28,14 @@ candy-rollcall/
 │  ├─ storage/
 │  │  ├─ json_store.py        # 原子写入 + .bak 损坏恢复
 │  │  ├─ import_export.py     # CSV/XLSX 导入导出
-│  │  └─ user_paths.py        # %LOCALAPPDATA%\CandyRollCall
+│  │  └─ user_paths.py        # %LOCALAPPDATA%\QuanQuanRollCall
 │  └─ windows/
 │     ├─ orb_win32.py         # 圆形悬浮球 HWND/WndProc
 │     ├─ window_manager.py    # 唯一主窗：显示/隐藏/全屏/JS 投递
 │     ├─ dpi_and_snap.py      # 主屏工作区与吸附
 │     └─ startup.py           # HKCU 自启与单实例互斥体
 ├─ frontend/                  # 糖果活力风页面（无外部资源）
-├─ packaging/CandyRollCall.spec
+├─ packaging/QuanQuanRollCall.spec
 ├─ tests/                     # 自动化测试 + Windows 实机清单
 └─ requirements.txt
 ```
@@ -44,7 +44,7 @@ candy-rollcall/
 
 ```bash
 pip install -r requirements.txt
-python -m pytest tests/ -q          # 数据与算法层自动化测试（55 项）
+python -m pytest tests/ -q          # 数据与算法层自动化测试（60 项）
 ```
 
 非 Windows 平台可运行核心逻辑测试；窗口层（悬浮球、WebView）须在 Windows 实机验证。
@@ -55,17 +55,20 @@ python -m pytest tests/ -q          # 数据与算法层自动化测试（55 项
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 python -m pip install -r requirements.txt
-pyinstaller packaging\CandyRollCall.spec --clean --noconfirm
-# dist\CandyRollCall.exe 复制到目标电脑，断网实测
+pyinstaller packaging\QuanQuanRollCall.spec --clean --noconfirm
+# dist\QuanQuanRollCall.exe 复制到目标电脑，断网实测
 ```
 
 先以 one-folder 调试，验收通过后再用 one-file（见 `tests/manual_windows_checklist.md`）。
 
 ## 数据位置
 
-- `%LOCALAPPDATA%\CandyRollCall\data.json` — 名单与设置（UTF-8，原子写入）
+- `%LOCALAPPDATA%\QuanQuanRollCall\data.json` — 名单与设置（UTF-8，原子写入）
 - `data.json.bak` — 最近一次可恢复副本（损坏时自动尝试）
 - 本轮已抽状态不落盘：退出重启后轮次从头开始
+- **改名兼容**：旧版 `CandyRollCall` 目录若存在而新目录还没有 `data.json`，
+  首次启动会自动把 `data.json`/`data.json.bak` 复制到新目录（旧目录保留）；
+  旧自启项 `CandyRollCall` 也会在启动时清理。
 
 ## 重要设计约束（与文档对应）
 

@@ -9,8 +9,9 @@ import sys
 from typing import Optional
 
 RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
-APP_NAME = "CandyRollCall"
-MUTEX_NAME = "CandyRollCall_SingleInstance_Mutex"
+APP_NAME = "QuanQuanRollCall"
+LEGACY_APP_NAMES = ("CandyRollCall",)  # 旧版自启项名，升级时清理
+MUTEX_NAME = "QuanQuanRollCall_SingleInstance_Mutex"
 
 
 def get_exe_path() -> str:
@@ -79,6 +80,26 @@ class StartupManager:
         except FileNotFoundError:
             return True  # 本就没有自启项：幂等视为成功
         except OSError:
+            return False
+
+    def cleanup_legacy(self) -> bool:
+        """删除旧版本（CandyRollCall）留下的自启项，避免升级后残留失效条目。
+
+        使用旧名注册的自启项指向旧 EXE；改名后它既不会随关闭开关删除，
+        也不会再被新版本维护，因此启动时主动清理。幂等，无此值即视为成功。
+        """
+        if not self._win:
+            return True
+        try:
+            import winreg
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, RUN_KEY, 0, winreg.KEY_SET_VALUE) as k:
+                for name in LEGACY_APP_NAMES:
+                    try:
+                        winreg.DeleteValue(k, name)
+                    except FileNotFoundError:
+                        pass
+            return True
+        except (FileNotFoundError, OSError):
             return False
 
     def check_stale_path(self) -> bool:

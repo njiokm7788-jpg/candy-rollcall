@@ -74,6 +74,14 @@
 - ☐ 运行时依赖（WebView2 Runtime、.NET）在交付说明中记录清楚
 - ☐ 无签名 EXE 在学校安全策略下的实际表现已记录（不指导绕过策略）
 
+## 改名升级（CandyRollCall → 圈圈点名 / QuanQuanRollCall）
+
+- ☐ 从旧版升级：`%LOCALAPPDATA%\CandyRollCall\data.json` 存在时，首次启动后新目录
+  `%LOCALAPPDATA%\QuanQuanRollCall\data.json` 自动出现且名单一致；旧目录保留
+- ☐ 旧版自启项（HKCU Run 下的 `CandyRollCall`）在首次启动后被清理；新开关写入 `QuanQuanRollCall`
+- ☐ 新旧两版 EXE 的互斥体不同名，可同时运行——升级期间先退出旧版再启动新版，避免两个悬浮球
+- ☐ 窗口标题、界面品牌、悬浮球标题均显示「圈圈点名」；exe 名为 `QuanQuanRollCall.exe`
+
 ## 非功能项（§14.1）
 
 - ☐ 典型教学电脑动画帧率记录（目标约 60fps，至少可用）

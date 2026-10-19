@@ -191,7 +191,7 @@ function bindRollControls() {
   $("btn-manage").onclick = () => showView("manage");
   $("btn-empty-manage").onclick = () => showView("manage");
   $("btn-quit").onclick = async () => {
-    if (await confirmDialog("确定退出 CandyRollCall 吗？")) api().quit_app();
+    if (await confirmDialog("确定退出 圈圈点名 吗？")) api().quit_app();
   };
   $("btn-mode").onclick = async () => {
     if (App.rolling) return;

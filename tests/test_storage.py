@@ -1,20 +1,22 @@
 """存储与会话状态测试（M1 门槛、§5、AT-21/22/29）。
 
-使用 CANDY_ROLLCALL_HOME 环境变量隔离临时数据目录。
+使用 QUANQUAN_ROLLCALL_HOME 环境变量隔离临时数据目录。
 """
 import os
 import sys
 import tempfile
 import threading
 import unittest
+from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 _tmpdir = tempfile.mkdtemp(prefix="candy-test-")
-os.environ["CANDY_ROLLCALL_HOME"] = _tmpdir
+os.environ["QUANQUAN_ROLLCALL_HOME"] = _tmpdir
 
 from app.core.application_state import ApplicationState
 from app.core.models import ValidationError, default_settings, validate_settings
+from app.storage import user_paths
 from app.storage.json_store import DataCorruptError, JsonStore
 
 
@@ -71,7 +73,7 @@ class TestApplicationState(unittest.TestCase):
     def setUp(self):
         # 每个测试独立的临时目录 + 新实例
         self.dir = tempfile.mkdtemp(prefix="candy-app-")
-        os.environ["CANDY_ROLLCALL_HOME"] = self.dir
+        os.environ["QUANQUAN_ROLLCALL_HOME"] = self.dir
         self.state = ApplicationState()
 
     # ---------- 提交与校验 ----------
@@ -224,7 +226,7 @@ class TestApplicationState(unittest.TestCase):
 class TestConcurrency(unittest.TestCase):
     def setUp(self):
         self.dir = tempfile.mkdtemp(prefix="candy-conc-")
-        os.environ["CANDY_ROLLCALL_HOME"] = self.dir
+        os.environ["QUANQUAN_ROLLCALL_HOME"] = self.dir
         self.state = ApplicationState()
 
     def test_concurrent_draws_single_transaction(self):
@@ -266,6 +268,38 @@ class TestConcurrency(unittest.TestCase):
         # 最终状态可加载且学生数在合法范围
         snap = self.state.full_snapshot()
         self.assertLessEqual(len(snap["students"]), 100)
+
+
+class TestLegacyDataMigration(unittest.TestCase):
+    """改名兼容：旧 CandyRollCall 目录的数据首次启动时复制到 QuanQuanRollCall。"""
+
+    def setUp(self):
+        self.base = tempfile.mkdtemp(prefix="qq-migrate-")
+        self.legacy = Path(self.base) / "CandyRollCall"
+        self.target = Path(self.base) / "QuanQuanRollCall"
+
+    def _write(self, root: Path, name: str, text: str = '{"schemaVersion": 2}'):
+        root.mkdir(parents=True, exist_ok=True)
+        (root / name).write_text(text, encoding="utf-8")
+
+    def test_copies_data_and_bak_when_target_empty(self):
+        self._write(self.legacy, "data.json", '{"schemaVersion": 2, "students": [{"name": "张三"}]}')
+        self._write(self.legacy, "data.json.bak")
+        self.assertTrue(user_paths.migrate_legacy_data(self.target, self.legacy))
+        self.assertIn("张三", (self.target / "data.json").read_text(encoding="utf-8"))
+        self.assertTrue((self.target / "data.json.bak").exists())
+        # 旧目录保留，不删除
+        self.assertTrue((self.legacy / "data.json").exists())
+
+    def test_does_not_overwrite_existing_target_data(self):
+        self._write(self.legacy, "data.json", '{"old": true}')
+        self._write(self.target, "data.json", '{"new": true}')
+        self.assertFalse(user_paths.migrate_legacy_data(self.target, self.legacy))
+        self.assertEqual((self.target / "data.json").read_text(encoding="utf-8"), '{"new": true}')
+
+    def test_no_legacy_data_is_noop(self):
+        self.assertFalse(user_paths.migrate_legacy_data(self.target, self.legacy))
+        self.assertFalse(self.target.exists())
 
 
 if __name__ == "__main__":

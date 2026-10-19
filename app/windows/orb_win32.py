@@ -176,7 +176,7 @@ class OrbWin32:
         wc.hInstance = hinst
         wc.hCursor = user32.LoadCursorW(None, 32512)  # IDC_ARROW
         wc.hbrBackground = gdi32.CreateSolidBrush(0x00FFF3D6)  # 奶油黄底（圆外被裁剪）
-        wc.lpszClassName = "CandyOrbWindow"
+        wc.lpszClassName = "QuanQuanOrbWindow"
         user32.RegisterClassW(ctypes.byref(wc))
 
         # 椭圆命中区域（AT-05）：区域句柄所有权交系统，不重复释放（§4.1）
@@ -185,7 +185,7 @@ class OrbWin32:
         style = WS_POPUP
         ex_style = WS_EX_TOPMOST | WS_EX_TOOLWINDOW
         self.hwnd = user32.CreateWindowExW(
-            ex_style, wc.lpszClassName, "CandyRollCall", style,
+            ex_style, wc.lpszClassName, "圈圈点名", style,
             pos[0], pos[1], self.size, self.size,
             None, None, hinst, None)
         if not self.hwnd:

@@ -225,7 +225,7 @@ def main() -> int:
         先隐藏创建，球线程就绪后由 wm.show() 显示。
         """
         win = webview.create_window(
-            "CandyRollCall 点名",
+            "圈圈点名",
             get_frontend_url(),
             js_api=bridge,
             width=win_width,
@@ -258,6 +258,7 @@ def main() -> int:
 
     # 7. 开机启动路径变更检查（AT-30）
     sm = StartupManager()
+    sm.cleanup_legacy()  # 清理旧版 CandyRollCall 自启项（改名后不再维护）
     if sm.is_enabled() and sm.check_stale_path():
         # 下次手动启动时识别当前路径；此处静默修正为当前 EXE（用户已在用新版路径）
         sm.enable()
